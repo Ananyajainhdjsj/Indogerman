@@ -2,24 +2,74 @@ from gurobipy import *
 
 def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=False):
     # --- 1. SETS ---
-    P = ['P1']      
+    P = ['P1','P2']      #inc
     # Market Zones (Combining Distributors & Customers)
-    C = ['C1', 'C2']      
-    O = ['O1']            
-    F = ['F1']            
-    R = ['R1']            
-    L = ['L1']            
-    S = ['S1']            
+    C = ['C1', 'C2','C3','C4']      
+    O = ['O1']          #collection center   
+    F = ['F1']          #refurbish
+    L = ['L1']          #landfill center 
+    # MODIFIED: Reduced to 5 Suppliers
+    S = ['S1','S2','S3','S4','S5']      #supplier       
     K = ['Monocrystalline'] 
-    M = ['Glass', 'Aluminum', 'Silicon', 'Plastic', 'Copper'] 
 
     # --- 2. PARAMETERS (Values in Euros €) ---
     
+    # --- Supplier Parameters ---
+    # Mapping Suppliers to Materials
+    Sup_Mat_Map = {
+        'S1': 'Aluminium_Frame',
+        'S2': 'Tempered_Glass',
+        'S3': 'Encapsulant',
+        'S4': 'Solar_Cell',
+        # MODIFIED: S5 now supplies both components
+        'S5': 'Backplate_and_JunctionBox'
+    }
+
+    # Bill of Materials (Qty needed per 1 Module)
+    BOM = {
+        'S1': 1.0, 
+        'S2': 1.0, 
+        'S3': 2.0, 
+        'S4': 1.0, 
+        # MODIFIED: 1 unit of S5 now equals 1 Backplate + 1 JBox
+        'S5': 1.0  
+    }
+
+    # Material Costs (€ per unit of component)
+    Mat_Cost = {
+        'S1': 15.0, 
+        'S2': 8.0, 
+        'S3': 2.5, 
+        'S4': 40.0, 
+        # MODIFIED: 5.0 (Backplate) + 7.5 (JBox) = 12.5
+        'S5': 12.5 
+    }
+
+    # Component Weights (kg per unit - used for Transport)
+    Mat_Weight = {
+        'S1': 2.0, 
+        'S2': 5.0, 
+        'S3': 0.75, 
+        'S4': 1.0, 
+        # MODIFIED: 1.5 (Backplate) + 0.75 (JBox) = 2.25
+        'S5': 2.25 
+    }
+
+    # Supplier Production Emissions (kg CO2e per unit)
+    E_Sup_Prod = {
+        'S1': 20.0, 
+        'S2': 8.0, 
+        'S3': 1.0, 
+        'S4': 25.0, 
+        # MODIFIED: 3.0 (Backplate) + 1.0 (JBox) = 4.0
+        'S5': 4.0 
+    }
+    # ----------------------------------------
+
     # Operational Costs (per KWp or kg)
     PC = {p: 140.0 for p in P}      # Production Cost (€/KWp)
     CC = {o: 8.0 for o in O}        # Collection Cost (€/KWp)
     FC = {f: 25.0 for f in F}       # Refurbishing Cost (€/KWp)
-    RC = {r: 0.60 for r in R}       # Recycling Cost (€/kg) - processing cost
     DC = {l: 0.15 for l in L}       # Disposal/Landfill Cost (€/kg)
     
     # Transport Cost
@@ -31,7 +81,6 @@ def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=Fal
     # Fixed Costs (Opening Facilities)
     FixO = {o: 15000.0 for o in O}    
     FixF = {f: 25000.0 for f in F}     
-    FixR = {r: 30000.0 for r in R}     
 
     # Demand & Returns (KWp)
     DEM = {(c, k): 1000.0 for c in C for k in K}  
@@ -40,42 +89,16 @@ def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=Fal
     # Technical Factors
     omega = {'Monocrystalline': 11.0}   # Weight (kg/KWp)
     alpha = {f: 0.90 for f in F}        # Refurbish Yield
-    beta = {r: 0.95 for r in R}         # Recycling Efficiency
-
-    # Quality Mix (Constraints on flow)
-    Quality_Mix = {
-        'Reuse_Cap': 0.20,   # Max 20% of returns can be reused directly
-        'Refurb_Cap': 0.40,  # Max 40% can be refurbished
-    }
-
-    # Bill of Materials (kg per KWp)
-    gamma = {
-        ('Monocrystalline', 'Glass'): 8.0, 
-        ('Monocrystalline', 'Aluminum'): 1.5, 
-        ('Monocrystalline', 'Silicon'): 0.5, 
-        ('Monocrystalline', 'Plastic'): 0.8, 
-        ('Monocrystalline', 'Copper'): 0.2
-    }
 
     # Capacities (KWp or kg)
     CAP_p = {p: 10000.0 for p in P}     
     CAP_o = {o: 100000.0 for o in O}  
     CAP_f = {f: 50000.0 for f in F}      
-    CAP_r = {r: 50000.0 for r in R}     
 
     # Revenues (€)
     Rev_reuse = {'Monocrystalline': 90.0}   # Selling used module (€/KWp)
     Rev_refurb = {'Monocrystalline': 110.0} # Selling refurbished module (€/KWp)
     
-    # Revenue from Materials (€/kg)
-    Rev_recycle = {
-        'Glass': 0.08, 
-        'Aluminum': 1.80, 
-        'Silicon': 12.0, 
-        'Plastic': 0.15, 
-        'Copper': 6.50
-    }
-
     # Distance (km)
     DIST = 50.0 
     def get_dist(i, j): return DIST
@@ -84,9 +107,7 @@ def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=Fal
     E_p = {p: 450.0 for p in P}     # Production
     E_o = {o: 5.0 for o in O}       # Collection
     E_f = {f: 30.0 for f in F}      # Refurbishing
-    E_r = {r: 1.5 for r in R}       # Recycling (per kg)
     E_l = {l: 0.5 for l in L}       # Disposal (per kg)
-    E_T = 0.00006                   # Transport (per kg-km)
 
     # --- 3. MODEL ---
     m = Model("Circular_Supply_Chain_Euro")
@@ -98,51 +119,68 @@ def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=Fal
     Y_cok = m.addVars(C, O, K, name="Y_cok", vtype=GRB.CONTINUOUS, lb=0) 
     Y_ock = m.addVars(O, C, K, name="Y_ock", vtype=GRB.CONTINUOUS, lb=0) 
     Y_ofk = m.addVars(O, F, K, name="Y_ofk", vtype=GRB.CONTINUOUS, lb=0) 
-    Y_ork = m.addVars(O, R, K, name="Y_ork", vtype=GRB.CONTINUOUS, lb=0) 
     Y_olk = m.addVars(O, L, K, name="Y_olk", vtype=GRB.CONTINUOUS, lb=0) 
     Y_fpk = m.addVars(F, P, K, name="Y_fpk", vtype=GRB.CONTINUOUS, lb=0) 
     S_ck = m.addVars(C, K, name="S_ck", vtype=GRB.CONTINUOUS, lb=0) 
-    Z_rsm = m.addVars(R, S, M, name="Z_rsm", vtype=GRB.CONTINUOUS, lb=0) 
     W_o = m.addVars(O, vtype=GRB.BINARY)
     W_f = m.addVars(F, vtype=GRB.BINARY)
-    W_r = m.addVars(R, vtype=GRB.BINARY)
+
+    # --- NEW: Supplier Variables ---
+    # Flow from Supplier s to Plant p (Units of material)
+    Z_sp = m.addVars(S, P, name="Z_sp", vtype=GRB.CONTINUOUS, lb=0)
+
+    # --- ARC-LEVEL ROUTING VARIABLES (per customer->collection batch) ---
+    Y_c_o_c2k = m.addVars(C, O, C, K, name="Y_c_o_c2k", vtype=GRB.CONTINUOUS, lb=0)  # c -> o -> reuse -> c2
+    Y_c_o_fk  = m.addVars(C, O, F, K, name="Y_c_o_fk",  vtype=GRB.CONTINUOUS, lb=0)     # c -> o -> f
+    Y_c_o_lk  = m.addVars(C, O, L, K, name="Y_c_o_lk",  vtype=GRB.CONTINUOUS, lb=0)     # c -> o -> l
 
     m.update()
 
+    # Add this parameter section
+    Quality_Ratios = {
+        'Max_Reuse': 0.30,      # Only 30% of returns are pristine enough to reuse
+        'Max_Refurb': 0.50,     # 50% can be fixed
+        # Remaining 20% is implicitly trash/landfill
+    }
+
     # --- OBJECTIVE ---
-    Fixed_Cost = (sum(FixO[o]*W_o[o] for o in O) + sum(FixF[f]*W_f[f] for f in F) + sum(FixR[r]*W_r[r] for r in R))
+    Fixed_Cost = (quicksum(FixO[o]*W_o[o] for o in O) + quicksum(FixF[f]*W_f[f] for f in F))
     
     Op_Cost = (
-        sum(PC[p] * X_pk[p, k] for p in P for k in K) + 
-        sum(CC[o] * Y_cok[c, o, k] for c in C for o in O for k in K) +
-        sum(FC[f] * Y_ofk[o, f, k] for o in O for f in F for k in K) +
-        sum(RC[r] * Y_ork[o, r, k] * omega[k] for o in O for r in R for k in K) + 
-        sum(DC[l] * Y_olk[o, l, k] * omega[k] for o in O for l in L for k in K)
+        quicksum(PC[p] * X_pk[p, k] for p in P for k in K) + 
+        quicksum(CC[o] * Y_cok[c, o, k] for c in C for o in O for k in K) +
+        quicksum(FC[f] * Y_ofk[o, f, k] for o in O for f in F for k in K) +
+        quicksum(DC[l] * Y_olk[o, l, k] * omega[k] for o in O for l in L for k in K) +
+        # NEW: Added Material Purchase Cost
+        quicksum(Mat_Cost[s] * Z_sp[s, p] for s in S for p in P)
     )
     
     Transport_Cost = (
-        sum(T * get_dist(p, c) * X_pck[p, c, k] * omega[k] for p in P for c in C for k in K) +
-        sum(T * get_dist(c, o) * Y_cok[c, o, k] * omega[k] for c in C for o in O for k in K) +
-        sum(T * get_dist(o, c) * Y_ock[o, c, k] * omega[k] for o in O for c in C for k in K) + 
-        sum(T * get_dist(o, f) * Y_ofk[o, f, k] * omega[k] for o in O for f in F for k in K) +
-        sum(T * get_dist(o, r) * Y_ork[o, r, k] * omega[k] for o in O for r in R for k in K) +
-        sum(T * get_dist(o, l) * Y_olk[o, l, k] * omega[k] for o in O for l in L for k in K) +
-        sum(T * get_dist(f, p) * Y_fpk[f, p, k] * omega[k] for f in F for p in P for k in K) +
-        sum(T * get_dist(r, s) * Z_rsm[r, s, mat] for r in R for s in S for mat in M)
+        quicksum(T * get_dist(p, c) * X_pck[p, c, k] * omega[k] for p in P for c in C for k in K) +
+        quicksum(T * get_dist(c, o) * Y_cok[c, o, k] * omega[k] for c in C for o in O for k in K) +
+        quicksum(T * get_dist(o, c) * Y_ock[o, c, k] * omega[k] for o in O for c in C for k in K) + 
+        quicksum(T * get_dist(o, f) * Y_ofk[o, f, k] * omega[k] for o in O for f in F for k in K) +
+        quicksum(T * get_dist(o, l) * Y_olk[o, l, k] * omega[k] for o in O for l in L for k in K) +
+        quicksum(T * get_dist(f, p) * Y_fpk[f, p, k] * omega[k] for f in F for p in P for k in K) +
+        # NEW: Added Supplier Transport Cost (S -> P)
+        quicksum(T * get_dist(0, 0) * Z_sp[s, p] * Mat_Weight[s] for s in S for p in P)
     )
     
     Revenue = (
-        sum(Rev_reuse[k] * Y_ock[o, c, k] for o in O for c in C for k in K) +
-        sum(Rev_refurb[k] * Y_fpk[f, p, k] for f in F for p in P for k in K) +
-        sum(Rev_recycle[mat] * Z_rsm[r, s, mat] for r in R for s in S for mat in M)
+        quicksum(Rev_reuse[k] * Y_ock[o, c, k] for o in O for c in C for k in K) +
+        quicksum(Rev_refurb[k] * Y_fpk[f, p, k] for f in F for p in P for k in K)
     )
     
-    Shortage_Cost = sum(Penalty * S_ck[c, k] for c in C for k in K)
+    Shortage_Cost = quicksum(Penalty * S_ck[c, k] for c in C for k in K)
     
     Z_Cost = Fixed_Cost + Op_Cost + Transport_Cost + Shortage_Cost - Revenue
 
     # Emissions expression
-    Env_Total = sum(E_p[p] * X_pk[p, k] for p in P for k in K)
+    Env_Total = (
+        quicksum(E_p[p] * X_pk[p, k] for p in P for k in K) + 
+        # NEW: Added Supplier Emissions (Scope 3)
+        quicksum(E_Sup_Prod[s] * Z_sp[s, p] for s in S for p in P)
+    )
 
     # Objective Setting
     if minimize_emissions_only:
@@ -152,60 +190,159 @@ def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=Fal
         m.addConstr(Env_Total <= epsilon_limit, "Env_Limit")
 
     # --- CONSTRAINTS ---
+    
+    # NEW: Bill of Materials Constraint
+    # Production at P requires exact amount of materials from S
+    for p in P:
+        for s in S:
+            m.addConstr(Z_sp[s, p] == quicksum(X_pk[p, k] for k in K) * BOM[s], name=f"BOM_{p}_{s}")
+
     # 1. Demand
     for c in C:
         for k in K:
-            m.addConstr(sum(X_pck[p, c, k] for p in P) + sum(Y_ock[o, c, k] for o in O) + S_ck[c, k] == DEM[c, k])
+            m.addConstr(quicksum(X_pck[p, c, k] for p in P) + quicksum(Y_ock[o, c, k] for o in O) + S_ck[c, k] == DEM[c, k])
 
     # 2. Returns
     for c in C:
         for k in K:
-            m.addConstr(sum(Y_cok[c, o, k] for o in O) <= RET[c, k])
+            m.addConstr(quicksum(Y_cok[c, o, k] for o in O) == RET[c, k])
+
+    # --- ARC-LEVEL LINKING CONSTRAINTS ---
+    for c_src in C:
+        for o in O:
+            for k in K:
+                m.addConstr(
+                    Y_cok[c_src, o, k]
+                    == quicksum(Y_c_o_c2k[c_src, o, c_dest, k] for c_dest in C)
+                    + quicksum(Y_c_o_fk[c_src, o, f, k] for f in F)
+                    + quicksum(Y_c_o_lk[c_src, o, l, k] for l in L)
+                )
+
+    for o in O:
+        for c_dest in C:
+            for k in K:
+                m.addConstr(Y_ock[o, c_dest, k] == quicksum(Y_c_o_c2k[c_src, o, c_dest, k] for c_src in C))
+        for f in F:
+            for k in K:
+                m.addConstr(Y_ofk[o, f, k] == quicksum(Y_c_o_fk[c_src, o, f, k] for c_src in C))
+        for l in L:
+            for k in K:
+                m.addConstr(Y_olk[o, l, k] == quicksum(Y_c_o_lk[c_src, o, l, k] for c_src in C))
 
     # 3. Flow Balance (Collection)
     for o in O:
         for k in K:
-            Total_In = sum(Y_cok[c, o, k] for c in C)
-            Total_Out = sum(Y_ock[o, c, k] for c in C) + sum(Y_ofk[o, f, k] for f in F) + sum(Y_ork[o, r, k] for r in R) + sum(Y_olk[o, l, k] for l in L)
-            m.addConstr(Total_In == Total_Out)
-
-            # Quality Constraints
-            m.addConstr(sum(Y_ock[o, c, k] for c in C) <= Quality_Mix['Reuse_Cap'] * Total_In)
-            m.addConstr(sum(Y_ofk[o, f, k] for f in F) <= Quality_Mix['Refurb_Cap'] * Total_In)
-
+            Total_In = quicksum(Y_cok[c, o, k] for c in C)
+            m.addConstr(quicksum(Y_ock[o, c, k] for c in C) <= Quality_Ratios['Max_Reuse'] * Total_In)
+            m.addConstr(quicksum(Y_ofk[o, f, k] for f in F) <= Quality_Ratios['Max_Refurb'] * Total_In)
+    
     # 4. Plant Balance
     for p in P:
         for k in K:
-            m.addConstr(X_pk[p, k] + sum(Y_fpk[f, p, k] for f in F) == sum(X_pck[p, c, k] for c in C))
+            m.addConstr(X_pk[p, k] + quicksum(Y_fpk[f, p, k] for f in F) == quicksum(X_pck[p, c, k] for c in C))
 
     # Yields
     for f in F:
         for k in K:
-            m.addConstr(sum(Y_fpk[f, p, k] for p in P) == alpha[f] * sum(Y_ofk[o, f, k] for o in O))
+            m.addConstr(quicksum(Y_fpk[f, p, k] for p in P) == alpha[f] * quicksum(Y_ofk[o, f, k] for o in O))
     
-    for r in R:
-        for mat in M:
-            m.addConstr(sum(Z_rsm[r, s, mat] for s in S) == beta[r] * sum(Y_ork[o, r, k] * gamma[k, mat] for o in O for k in K))
+    # 5. Capacities
+    for p in P:
+        m.addConstr(quicksum(X_pk[p, k] for k in K) <= CAP_p[p], name=f"Prod_Cap_{p}")
 
-    # Capacities
-    for o in O: m.addConstr(sum(Y_cok[c, o, k] for c in C for k in K) * omega['Monocrystalline'] <= CAP_o[o] * W_o[o]) 
-    for f in F: m.addConstr(sum(Y_ofk[o, f, k] for o in O for k in K) * omega['Monocrystalline'] <= CAP_f[f] * W_f[f])
-    for r in R: m.addConstr(sum(Y_ork[o, r, k] * omega['Monocrystalline'] for o in O for k in K) <= CAP_r[r] * W_r[r])
+    for o in O: m.addConstr(quicksum(Y_cok[c, o, k] for c in C for k in K) * omega['Monocrystalline'] <= CAP_o[o] * W_o[o]) 
+    for f in F: m.addConstr(quicksum(Y_ofk[o, f, k] for o in O for k in K) * omega['Monocrystalline'] <= CAP_f[f] * W_f[f])
 
     m.optimize()
 
     # --- OUTPUT ---
     if m.status == GRB.OPTIMAL:
+        cost_val = Z_Cost.getValue()
+        env_val = Env_Total.getValue()
+
         # Detailed Print for Single Run
-        if not minimize_emissions_only: # Only print trace for normal runs
+        if not minimize_emissions_only: 
             print("\n" + "="*60)
             print(f"   OPTIMAL SOLUTION FOUND (EUR)")
             print(f"   Total Cost: €{m.objVal:,.2f}")
             print("="*60)
-            # ... (Add your trace print code here if you want to see it every time) ...
+            
+            tol = 1e-6
+            
+            # NEW: Print Supplier Flows
+            print('\n=== SUPPLIER FLOWS (S -> P) ===')
+            for s in S:
+                for p in P:
+                    val = Z_sp[s, p].X
+                    if val > tol:
+                        print(f"  {s} ({Sup_Mat_Map[s]}) -> {p}: {val:.1f} units")
+            
+            print('\n=== CUSTOMER RETURNS (c -> o) ===')
+            for c in C:
+                for o in O:
+                    val = sum(Y_cok[c, o, k].X for k in K)
+                    if val > tol:
+                        print(f"{c} -> {o}: {val:.1f}")
 
-        cost_val = Z_Cost.getValue()
-        env_val = Env_Total.getValue()
+            print('\n=== ARC-LEVEL ROUTING (c -> o -> destination) ===')
+            for c_src in C:
+                for o in O:
+                    for k in K:
+                        for c_dest in C:
+                            v = Y_c_o_c2k[c_src, o, c_dest, k].X
+                            if v > tol:
+                                print(f"{c_src} -> {o} -> Reuse -> {c_dest}: {v:.1f}")
+                        for f in F:
+                            v = Y_c_o_fk[c_src, o, f, k].X
+                            if v > tol:
+                                print(f"{c_src} -> {o} -> Refurb -> {f}: {v:.1f}")
+                        for l in L:
+                            v = Y_c_o_lk[c_src, o, l, k].X
+                            if v > tol:
+                                print(f"{c_src} -> {o} -> Landfill -> {l}: {v:.1f}")
+
+            print('\n=== COLLECTION CENTER AGGREGATE FLOWS (O -> ...) ===')
+            for o in O:
+                for c_dest in C:
+                    v = sum(Y_c_o_c2k[c_src, o, c_dest, k].X for c_src in C for k in K)
+                    if v > tol:
+                        print(f"Reuse: {o} -> {c_dest}: {v:.1f}")
+                for f in F:
+                    v = sum(Y_c_o_fk[c_src, o, f, k].X for c_src in C for k in K)
+                    if v > tol:
+                        print(f"Refurb: {o} -> {f}: {v:.1f}")
+                for l in L:
+                    v = sum(Y_c_o_lk[c_src, o, l, k].X for c_src in C for k in K)
+                    if v > tol:
+                        print(f"Landfill: {o} -> {l}: {v:.1f}")
+
+            print('\n=== REFURB -> PLANT ===')
+            for f in F:
+                for p in P:
+                    v = sum(Y_fpk[f, p, k].X for k in K)
+                    if v > tol:
+                        print(f"{f} -> {p}: {v:.1f}")
+
+            print('\n=== PRODUCTION ===')
+            for p in P:
+                prod = sum(X_pk[p, k].X for k in K)
+                print(f"{p} Production: {prod:.1f}")
+                for c in C:
+                    shipped = sum(X_pck[p, c, k].X for k in K)
+                    if shipped > tol:
+                        print(f"{p} -> {c}: {shipped:.1f}")
+
+            print('\n=== SHORTAGE ===')
+            for c in C:
+                for k in K:
+                    sh = S_ck[c, k].X
+                    if sh > tol:
+                        print(f"{c} shortage: {sh:.1f}")
+
+            print('\n=== OBJECTIVE ===')
+            print(f"Total Cost: €{cost_val:,.2f}")
+            print(f"Total Emissions: {env_val:,.2f} kg CO2e")
+
         return "Optimal", cost_val, env_val
     else:
         if m.status == GRB.INFEASIBLE:
