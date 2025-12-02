@@ -1,0 +1,38 @@
+\ Model SupplyChain_MultiProduct_copy
+\ LP format - for model browsing. Use MPS format to capture full model detail.
+\ Signature: 0xe1adbdf427ea7c54
+Minimize
+ 
+Subject To
+ demand_C1_P2: x[W1,C1,P2] = 600
+ demand_C2_P2: x[W1,C2,P2] = 800
+ handle_out_M1_P2: - x[M1,W1,P2] + z[M1,P2] = 0
+ handle_in_M2_P2: - x[S1,M2,P2] - x[S2,M2,P2] + z[M2,P2] = 0
+ handle_out_M2_P2: - x[M2,W1,P2] + z[M2,P2] = 0
+ handle_in_S1_P2: z[S1,P2] = 0
+ handle_out_S1_P2: - x[S1,M1,P2] - x[S1,M2,P2] - x[S1,W1,P2] + z[S1,P2]
+   = 0
+ handle_in_S2_P2: z[S2,P2] = 0
+ handle_out_S2_P2: - x[S2,M1,P2] - x[S2,M2,P2] - x[S2,W1,P2] + z[S2,P2]
+   = 0
+ handle_out_W1_P2: - x[W1,C1,P2] - x[W1,C2,P2] + z[W1,P2] = 0
+ bom_balance_M1_P2: x[S1,M1,P2] + x[S2,M1,P2] - z[M1,P2] = 0
+ bom_balance_W1_P2: x[M1,W1,P2] + x[M2,W1,P2] + x[S1,W1,P2] + x[S2,W1,P2]
+   - z[W1,P2] = 0
+Bounds
+ x[M1,W1,P2] free
+ x[M2,W1,P2] free
+ x[S1,M1,P2] free
+ x[S1,M2,P2] free
+ x[S1,W1,P2] free
+ x[S2,M1,P2] free
+ x[S2,M2,P2] free
+ x[S2,W1,P2] free
+ x[W1,C1,P2] free
+ x[W1,C2,P2] free
+ z[M1,P2] free
+ z[M2,P2] free
+ z[S1,P2] free
+ z[S2,P2] free
+ z[W1,P2] free
+End

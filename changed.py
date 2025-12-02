@@ -16,17 +16,17 @@ def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=Fal
     # --- 2. PARAMETERS (Values in Euros €) ---
     
     # Operational Costs (per KWp or kg)
-    PC = {p: 140.0 for p in P}      # Production Cost (€/KWp)
+    PC = {p: 126.0 for p in P}      # Production Cost (€/KWp)
     CC = {o: 8.0 for o in O}        # Collection Cost (€/KWp)
     FC = {f: 25.0 for f in F}       # Refurbishing Cost (€/KWp)
     RC = {r: 0.60 for r in R}       # Recycling Cost (€/kg) - processing cost
     DC = {l: 0.15 for l in L}       # Disposal/Landfill Cost (€/kg)
     
     # Transport Cost
-    T = 0.004                       # Transport Cost (€ per kg-km)
+    T = 0.0001                       # Transport Cost (€ per kg-km)
     
     # Penalty Cost (Shortage)
-    Penalty = 800.0                 # Penalty for unmet demand (€/KWp)
+    Penalty = 500.0                 # Penalty for unmet demand (€/KWp)
 
     # Fixed Costs (Opening Facilities)
     FixO = {o: 15000.0 for o in O}    
@@ -34,11 +34,11 @@ def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=Fal
     FixR = {r: 30000.0 for r in R}     
 
     # Demand & Returns (KWp)
-    DEM = {(c, k): 1000.0 for c in C for k in K}  
-    RET = {(c, k): 800.0 for c in C for k in K} 
+    DEM = {(c, k):80000.0 for c in C for k in K}  
+    RET = {(c, k): 80000.0 for c in C for k in K} 
 
     # Technical Factors
-    omega = {'Monocrystalline': 11.0}   # Weight (kg/KWp)
+    omega = {'Monocrystalline': 49.3}   # Weight (kg/KWp)
     alpha = {f: 0.90 for f in F}        # Refurbish Yield
     beta = {r: 0.95 for r in R}         # Recycling Efficiency
 
@@ -80,13 +80,13 @@ def solve_circular_supply_chain_model(epsilon_limit, minimize_emissions_only=Fal
     DIST = 50.0 
     def get_dist(i, j): return DIST
 
-    # Emissions Factors (kg CO2e)
-    E_p = {p: 450.0 for p in P}     # Production
-    E_o = {o: 5.0 for o in O}       # Collection
-    E_f = {f: 30.0 for f in F}      # Refurbishing
-    E_r = {r: 1.5 for r in R}       # Recycling (per kg)
-    E_l = {l: 0.5 for l in L}       # Disposal (per kg)
-    E_T = 0.00006                   # Transport (per kg-km)
+    # Emissions Factors (kg CO2e) values from excel
+    E_p = {p: 580.0 for p in P}     # Production
+    E_o = {o: 10.0 for o in O}       # Collection
+    E_f = {f: 150.0 for f in F}      # Refurbishing
+    E_r = {r: 60 for r in R}       # Recycling (per kg)
+    E_l = {l: 5 for l in L}       # Disposal (per kg)
+    E_T =0.1                  # Transport (per kg-km)
 
     # --- 3. MODEL ---
     m = Model("Circular_Supply_Chain_Euro")
