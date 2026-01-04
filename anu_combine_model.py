@@ -18,8 +18,9 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
     log(" STARTING MODEL RUN WITH FULL LOGGING ")
     log("====================================================\n")
 
-    log("--- Loading file Germany_data_v2.xlsx ---")
-    xls = pd.ExcelFile("Germany_data_v2.xlsx")
+    filename = "Germany_data_v2_1512.xlsx"
+    log(f"--- Loading file {filename} ---")
+    xls = pd.ExcelFile(filename)
 
     # --------------------------
     # Helper to extract set
@@ -29,32 +30,41 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
         log(f"Loaded set {col}: {len(vals)} elements → {vals}")
         return vals
 
-
     # -----------------------------------------------------
     # LOAD SETS
     # -----------------------------------------------------
     df_sets = pd.read_excel(xls, '1. Sets')
+    
     P = get_set(df_sets, 'Plants (P)')
-    C = get_set(df_sets, 'Customer (C)')
+    C = get_set(df_sets, 'CustomerZones/Market (C)')
     O = get_set(df_sets, 'Collection Centers (O)')
     F = get_set(df_sets, 'Refurbish Centers (F)')
     L = get_set(df_sets, 'Landfills (L)')
     S = get_set(df_sets, 'Suppliers (S)')
-    K = get_set(df_sets, 'Module Types (K)')
+    
+    # 'Module Types (K)' is not in the 'Sets' sheet, extract from Weights
+    df_w_raw = pd.read_excel(xls, '7. Module Weights')
+    K = [x for x in df_w_raw['Module_Type_ID'].dropna().unique()]
+    log(f"Loaded set Module Types (K) from Weights file: {len(K)} elements → {K}")
 
     log("\n===== PARAMETERS LOADING =====\n")
 
     # -----------------------------------------------------
     # PRODUCTION COSTS
     # -----------------------------------------------------
-    PC = pd.read_excel(xls, '2. Production Costs').set_index('Plant_ID')['Production_Cost_per_KWp (PC_p)'].to_dict()
+    sheet_prod = '2. Production Costs' if '2. Production Costs' in xls.sheet_names else 'Prod'
+    if 'Prod' not in xls.sheet_names and '2. Production Costs' not in xls.sheet_names:
+         possible = [s for s in xls.sheet_names if "Prod" in s]
+         if possible: sheet_prod = possible[0]
+    
+    PC = pd.read_excel(xls, sheet_prod).set_index('Plant_ID')['Production_Cost_per_KWp (PC_p)'].to_dict()
     log("Production Costs (PC):", PC)
 
     # ----------------------------
-    # OPERATIONAL COSTS (Corrected!)
+    # OPERATIONAL COSTS
     # ----------------------------
     df_ops = pd.read_excel(xls, '3. Operational Costs') \
-                .set_index('Facility_ID')['Cost_per_Unit']
+                .set_index('Facility_ID')['Cost_per_Unit (CC_o/FC_f for KWp)']
 
     CC = {o: df_ops.get(o, 0) for o in O}   # Collection per KWp
     FC = {f: df_ops.get(f, 0) for f in F}   # Refurbish per KWp
@@ -108,20 +118,20 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
     # -----------------------------------------------------
     # CAPACITIES
     # -----------------------------------------------------
-    CAP = pd.read_excel(xls, "9. Capacities").set_index("Facility_ID")["Capacity_Value"].to_dict()
+    CAP = pd.read_excel(xls, "9. Capacities").set_index("Facility_ID")["Capacity_Value_kWp"].to_dict()
     log("Capacity map:", CAP)
 
     # -----------------------------------------------------
     # REVENUES
     # -----------------------------------------------------
     df_rev = pd.read_excel(xls, "10. Revenues")
-    Rev_reuse  = df_rev[df_rev["Revenue_Stream"]=="Reuse"].set_index("Item_ID")["Revenue_per_Unit (Rev)"].to_dict()
-    Rev_refurb = df_rev[df_rev["Revenue_Stream"]=="Refurbish"].set_index("Item_ID")["Revenue_per_Unit (Rev)"].to_dict()
+    Rev_reuse  = df_rev[df_rev["Revenue_Stream"]=="Reuse"].set_index("Item_ID")["Revenue_per_Unit (Rev)_€"].to_dict()
+    Rev_refurb = df_rev[df_rev["Revenue_Stream"]=="Refurbish"].set_index("Item_ID")["Revenue_per_Unit (Rev)_€"].to_dict()
     log("Reuse revenue:", Rev_reuse)
     log("Refurb revenue:", Rev_refurb)
 
     # -----------------------------------------------------
-    # DISTANCES
+    # DISTANCES & TRANSPORT
     # -----------------------------------------------------
     df_trans = pd.read_excel(xls, "11. Transportation")
     dist_map = {(r["Origin_ID"], r["Destination_ID"]): r["Distance_km"]
@@ -132,20 +142,22 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
 
     log("Transport entries:", len(dist_map))
 
-    T_cost = 0.004
-    log("Transport cost per kg-km =", T_cost)
+    T_cost = df_trans['Cost_per_kg_km'].iloc[0]
+    T_emit = df_trans['Emission_per_kg_km'].iloc[0]
+    
+    log(f"Transport cost per kg-km = {T_cost}")
+    log(f"Transport emission per kg-km = {T_emit}")
 
     # -----------------------------------------------------
     # EMISSIONS
     # -----------------------------------------------------
-    df_env = pd.read_excel(xls, "12. Environmental").set_index("Parameter_Name")["Value"]
+    df_env = pd.read_excel(xls, "12. Environmental").set_index("Parameter_Name")["Value_kg_CO2e"]
     E_p  = df_env.get("E_p", 580)
-    E_co = df_env.get("E_co", 0.4)
+    E_co = df_env.get("E_o", 0.4) 
     E_f  = df_env.get("E_f", 1.2)
     E_l  = df_env.get("E_l", 0.3)
-    T_emit = df_env.get("ET", 0.0009)
 
-    log("Emissions loaded:", {"E_p":E_p, "E_co":E_co, "E_f":E_f, "E_l":E_l, "ET":T_emit})
+    log("Emissions loaded:", {"E_p":E_p, "E_co":E_co, "E_f":E_f, "E_l":E_l, "T_emit": T_emit})
 
     # ----------------------------
     # SUPPLIER BOM
@@ -154,8 +166,9 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
 
     BOM = df_bom.set_index('Supplier_ID')['Qty_per_Module'].to_dict()
     Mat_Cost = df_bom.set_index('Supplier_ID')['Cost_per_Unit'].to_dict()
-    Mat_Weight = df_bom.set_index('Supplier_ID')['Weight_per_Unit_kg'].to_dict()
-    Em_Supplier = df_bom.set_index('Supplier_ID')['Emission_per_Unit'].to_dict()
+    Mat_Weight = df_bom.set_index('Supplier_ID')['Weight_per_module_kg'].to_dict()
+    # Added fillna(0) to handle NaN values (like in S5)
+    Em_Supplier = df_bom.set_index('Supplier_ID')['Emission_per_kWp'].fillna(0).to_dict()
 
     print("Supplier BOM loaded:\n", BOM)
     print("Material Cost per Unit:\n", Mat_Cost)
@@ -263,12 +276,17 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
 
     # Capacity
     for p in P:
-        m.addConstr(quicksum(X_pk[p,k] for k in K) <= CAP.get(p,1e12))
-    for o in O:
-        m.addConstr(quicksum(Y_cok[c,o,k]*omega[k] for c in C for k in K) <= CAP.get(o,1e12)*W_o[o])
-    for f in F:
-        m.addConstr(quicksum(Y_ofk[o,f,k]*omega[k] for o in O for k in K) <= CAP.get(f,1e12)*W_f[f])
+        # Plant capacity is already consistent (KWp vs KWp)
+        m.addConstr(quicksum(X_pk[p,k] for k in K) <= CAP.get(p, 1e12))
 
+    for o in O:
+        # FIXED: Removed *omega[k]. Now comparing Flow (KWp) <= Capacity (KWp)
+        m.addConstr(quicksum(Y_cok[c,o,k] for c in C for k in K) <= CAP.get(o, 1e12) * W_o[o])
+
+    for f in F:
+        # FIXED: Removed *omega[k]. Now comparing Flow (KWp) <= Capacity (KWp)
+        m.addConstr(quicksum(Y_ofk[o,f,k] for o in O for k in K) <= CAP.get(f, 1e12) * W_f[f])
+        
     log("Added Capacity constraints.")
     log("\n===== DEFINING OBJECTIVES =====\n")
 
@@ -341,7 +359,18 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
     # ---------------------------------------------------
     m.setObjective(Expr_Cost, GRB.MINIMIZE)
     m.optimize()
-    Zcost_min = m.objVal
+
+    # CHECK FOR OPTIMALITY BEFORE ACCESSING RESULTS
+    if m.Status != GRB.OPTIMAL:
+        log(f"Optimization Failed for Cost Minimization! Status Code: {m.Status}")
+        if m.Status == GRB.INFEASIBLE:
+            log("Model is Infeasible. Computing IIS...")
+            m.computeIIS()
+            m.write(f"infeasible_model_{timestamp}.ilp")
+            log(f"Infeasibility report written to 'infeasible_model_{timestamp}.ilp'")
+        return [], []
+
+    Zcost_min = m.ObjVal  # FIXED: objVal -> ObjVal (Capital O)
     Zenv_at_costmin = Expr_Env.getValue()
 
     log(f"Min Cost Solution → Cost={Zcost_min}, Env={Zenv_at_costmin}")
@@ -351,7 +380,13 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
     # ---------------------------------------------------
     m.setObjective(Expr_Env, GRB.MINIMIZE)
     m.optimize()
-    Zenv_min = m.objVal
+
+    # Safety check
+    if m.Status != GRB.OPTIMAL:
+        log(f"Optimization Failed for Env Minimization! Status: {m.Status}")
+        return [], []
+
+    Zenv_min = m.ObjVal  # FIXED: objVal -> ObjVal
     Zcost_at_envmin = Expr_Cost.getValue()
 
     log(f"Min Env Solution → Env={Zenv_min}, Cost={Zcost_at_envmin}")
@@ -371,8 +406,13 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
         m.setObjective(Expr_Cost, GRB.MINIMIZE)
         m.optimize()
 
-        results_cost_min.append((eps, m.objVal, Expr_Env.getValue()))
-        log(f"[Curve A] ε_env={eps:.2f} → Cost={m.objVal:.2f}, Env={Expr_Env.getValue():.2f}")
+        if m.Status == GRB.OPTIMAL:
+            val_cost = m.ObjVal  # FIXED
+            val_env = Expr_Env.getValue()
+            results_cost_min.append((eps, val_cost, val_env))
+            log(f"[Curve A] ε_env={eps:.2f} → Cost={val_cost:.2f}, Env={val_env:.2f}")
+        else:
+            log(f"[Curve A] ε_env={eps:.2f} → Infeasible or Failed (Status {m.Status})")
 
         m.remove(Con_eps)
         m.update()
@@ -390,7 +430,6 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
     log("\n===== STARTING EPSILON LOOP (ENV-MIN CURVE) =====\n")
 
     # Here we sweep the COST range
-    # you can expand upper bound if needed
     eps_cost_values = np.linspace(Zcost_min, Zcost_at_envmin, num_eps_points)
     results_env_min = []
 
@@ -399,8 +438,13 @@ def solve_circular_supply_chain_epsilon_logged(num_eps_points=10):
         m.setObjective(Expr_Env, GRB.MINIMIZE)
         m.optimize()
 
-        results_env_min.append((eps, Expr_Cost.getValue(), m.objVal))
-        log(f"[Curve B] ε_cost={eps:.2f} → Cost={Expr_Cost.getValue():.2f}, Env={m.objVal:.2f}")
+        if m.Status == GRB.OPTIMAL:
+            val_cost = Expr_Cost.getValue()
+            val_env = m.ObjVal # FIXED
+            results_env_min.append((eps, val_cost, val_env))
+            log(f"[Curve B] ε_cost={eps:.2f} → Cost={val_cost:.2f}, Env={val_env:.2f}")
+        else:
+            log(f"[Curve B] ε_cost={eps:.2f} → Infeasible or Failed (Status {m.Status})")
 
         m.remove(Con_eps)
         m.update()
